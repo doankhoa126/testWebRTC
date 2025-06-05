@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>WebRTC Call</title>
+</head>
+
+<body>
+    <h2>WebRTC Audio/Video Call</h2>
+
+    <video id="localVideo" autoplay muted playsinline style="width: 300px; display:none;"></video>
+    <video id="remoteVideo" autoplay playsinline style="width: 300px; display:none;"></video>
+
+    <br />
+    <input id="roomInput" placeholder="Room ID" />
+    <button id="joinBtn">Join Room</button>
+    <br /><br />
+    <label><input type="radio" name="callType" value="audio" checked /> Audio Call</label>
+    <label><input type="radio" name="callType" value="video" /> Video Call</label>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let localStream, peerConnection;
+        const roomInput = document.getElementById("roomInput");
+        const joinBtn = document.getElementById("joinBtn");
+        const localVideo = document.getElementById("localVideo");
+        const remoteVideo = document.getElementById("remoteVideo");
+
+        const config = {
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        };
+
+        joinBtn.onclick = async () => {
+            const room = roomInput.value;
+            if (!room) return;
+
+            const callType = document.querySelector('input[name="callType"]:checked').value;
+            const mediaConstraints =
+                callType === "audio"
+                    ? { video: false, audio: true }
+                    : { video: true, audio: true };
+
+            try {
+                socket.emit("join", room);
+
+                localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+
+                // Video hiển thị nếu là call video
+                localVideo.srcObject = callType === "video" ? localStream : null;
+                localVideo.style.display = callType === "video" ? "block" : "none";
+
+                peerConnection = new RTCPeerConnection(config);
+                localStream.getTracks().forEach((track) => {
+                    peerConnection.addTrack(track, localStream);
+                });
+
+                peerConnection.onicecandidate = ({ candidate }) => {
+                    if (candidate) {
+                        socket.emit("signal", { room, data: { candidate } });
+                    }
+                };
+
+                peerConnection.ontrack = ({ streams: [stream] }) => {
+                    remoteVideo.srcObject = stream;
+                    remoteVideo.style.display = callType === "video" ? "block" : "none";
+                };
+
+                socket.on("user-joined", async () => {
+                    const offer = await peerConnection.createOffer();
+                    await peerConnection.setLocalDescription(offer);
+                    socket.emit("signal", { room, data: { sdp: offer } });
+                });
+
+                socket.on("signal", async ({ data }) => {
+                    if (data.sdp) {
+                        await peerConnection.setRemoteDescription(
+                            new RTCSessionDescription(data.sdp)
+                        );
+                        if (data.sdp.type === "offer") {
+                            const answer = await peerConnection.createAnswer();
+                            await peerConnection.setLocalDescription(answer);
+                            socket.emit("signal", { room, data: { sdp: answer } });
+                        }
+                    } else if (data.candidate) {
+                        await peerConnection.addIceCandidate(
+                            new RTCIceCandidate(data.candidate)
+                        );
+                    }
+                });
+            } catch (err) {
+                console.error("Error:", err);
+                alert("Không thể truy cập camera/mic. Hãy cấp quyền cho trình duyệt.");
+            }
+        };
+    </script>
+</body>
+
+</html>
